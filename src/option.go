@@ -13,6 +13,14 @@ type Option struct {
 	Secret          string `yaml:"Secret"`          // data encryption key
 }
 
+var (
+	// DefaultOption default initialization option
+	DefaultOption = Option{
+		Directory:       "./data",
+		DataFileMaxSize: 10240,
+	}
+)
+
 // Validation 做一些初始化工作
 func (o *Option) Validation() {
 

@@ -111,6 +111,134 @@ type record struct {
 	ExpireTime uint32 // data record expire time
 }
 
+// Close shut down the storage engine and flush the data
+func Close() error {
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	if err := active.Sync(); err != nil {
+		return err
+	}
+
+	for _, file := range fileList {
+		if err := file.Close(); err != nil {
+			return err
+		}
+	}
+
+	return saveIndexToFile()
+}
+
+// Get 获得指定键的数据对象
+func Get(key []byte) (data *Data) {
+	data = &Data{}
+	mutex.RLock()
+	defer mutex.RUnlock()
+
+	sum64 := HashedFunc.Sum64(key)
+
+	if index[sum64] == nil {
+		data.Err = errors.New("the current key does not exist")
+		return
+	}
+
+	if index[sum64].ExpireTime <= uint32(time.Now().Unix()) {
+		data.Err = errors.New("the current key has expired")
+		return
+	}
+
+	item, err := encoder.Read(index[sum64])
+	if err != nil {
+		data.Err = err
+		return
+	}
+	data.Item = item
+	return
+}
+
+// Put 将 KV 加入存储引擎中
+// actionFunc 设置了超时时间
+func Put(key, value []byte, actionFunc ...func(action *Action)) (err error) {
+	var (
+		action Action
+		size   int
+	)
+
+	if len(actionFunc) > 0 {
+		for _, fn := range actionFunc {
+			fn(&action)
+		}
+	}
+
+	fileInfo, _ := active.Stat()
+
+	if fileInfo.Size() >= defaultMaxFileSize {
+		if err := closeActiveFile(); err != nil {
+			return err
+		}
+
+		if err := createActiveFile(); err != nil {
+			return err
+		}
+	}
+
+	sum64 := HashedFunc.Sum64(key)
+
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	timestamp := time.Now().Unix()
+
+	if size, err = encoder.Write(NewItem(key, value, uint64(timestamp)), active); err != nil {
+		return err
+	}
+
+	index[sum64] = &record{
+		FID:        dataFileVersion,
+		Size:       uint32(size),
+		Offset:     writeOffset,
+		Timestamp:  uint32(timestamp),
+		ExpireTime: uint32(action.TTL.Unix()),
+	}
+
+	writeOffset += uint32(size)
+
+	return nil
+}
+
+func closeActiveFile() error {
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	if err := active.Sync(); err != nil {
+		return err
+	}
+
+	if err := active.Close(); err != nil {
+		return err
+	}
+
+	// 将之前的可写文件设置为只读
+	if file, err := openDataFile(FR, dataFileVersion); err == nil {
+		fileList[dataFileVersion] = file
+		return nil
+	}
+
+	return errors.New("error opening write only file")
+}
+
+// Action Operation add-on
+type Action struct {
+	TTL time.Time // Survival time
+}
+
+// Remove removes specified data from storage
+func Remove(key []byte) {
+	mutex.Lock()
+	defer mutex.Unlock()
+	delete(index, HashedFunc.Sum64(key))
+}
+
 // 打开
 func Open(opt Option) error {
 	// 做一些初始化的工作

@@ -95,7 +95,7 @@ func (d Data) Bool() bool {
 	return false
 }
 
-// Bson convert the data to Bson binary
+// Bson 将数据转换为Bson二进制
 func Bson(v interface{}) []byte {
 	if v == nil {
 		// ??? NIL
